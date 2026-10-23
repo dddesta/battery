@@ -4,7 +4,7 @@
 ## Update management
 ## variables are used by this binary as well at the update script
 ## ###############
-BATTERY_CLI_VERSION="v1.3.6"
+BATTERY_CLI_VERSION="v1.3.7"
 
 # If a script may run as root:
 #   - Reset PATH to safe defaults at the very beginning of the script.
@@ -50,7 +50,7 @@ smc_binary="$binfolder/smc"
 # Temporarily set to your username and branch to test update functionality with your fork.
 # Security note: Do NOT allow github_user or github_branch to be injected via environment
 #                variables or any other means. Keep them hardcoded.
-github_user="actuallymentor"
+github_user="dddesta"
 github_branch="main"
 github_url_setup_sh="https://raw.githubusercontent.com/${github_user}/battery/${github_branch}/setup.sh"
 github_url_update_sh="https://raw.githubusercontent.com/${github_user}/battery/${github_branch}/update.sh"
