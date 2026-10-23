@@ -4,7 +4,7 @@
 ## Update management
 ## variables are used by this binary as well at the update script
 ## ###############
-BATTERY_CLI_VERSION="v1.3.4"
+BATTERY_CLI_VERSION="v1.3.5"
 
 # If a script may run as root:
 #   - Reset PATH to safe defaults at the very beginning of the script.
@@ -247,8 +247,23 @@ function smc_write_hex() {
 [[ $($smc_binary -k CH0I -r) =~ "no data" ]] && smc_supports_adapter_ch0i=false || smc_supports_adapter_ch0i=true;
 [[ $($smc_binary -k CH0J -r) =~ "no data" || $($smc_binary -k CH0J -r) =~ "Error" ]] && smc_supports_adapter_ch0j=false || smc_supports_adapter_ch0j=true;
 
+# Some firmwares (seen on an M1 MacBook Pro running macOS 15.8) expose neither CHTE nor CH0B/CH0C,
+# so there is no key that only inhibits charging. If an adapter key exists we limit charging
+# by cutting the adapter instead: the mac then runs from the battery until it is re-enabled.
+if [[ "$smc_supports_tahoe" == "false" && "$smc_supports_legacy" == "false" &&
+	("$smc_supports_adapter_chie" == "true" || "$smc_supports_adapter_ch0j" == "true" || "$smc_supports_adapter_ch0i" == "true") ]]; then
+	smc_charging_via_adapter=true
+else
+	smc_charging_via_adapter=false
+fi
+
+# On those macs CHIE is present but ignored (verified on an M1 on macOS 15.8), only CH0J cuts the adapter
+function use_chie_for_adapter() {
+	[[ "$smc_supports_adapter_chie" == "true" ]] && ! { [[ "$smc_charging_via_adapter" == "true" && "$smc_supports_adapter_ch0j" == "true" ]]; }
+}
+
 function log_smc_capabilities() {
-	log "SMC capabilities: tahoe=$smc_supports_tahoe legacy=$smc_supports_legacy CHIE=$smc_supports_adapter_chie CH0I=$smc_supports_adapter_ch0i CH0J=$smc_supports_adapter_ch0j"
+	log "SMC capabilities: tahoe=$smc_supports_tahoe legacy=$smc_supports_legacy CHIE=$smc_supports_adapter_chie CH0I=$smc_supports_adapter_ch0i CH0J=$smc_supports_adapter_ch0j charging_via_adapter=$smc_charging_via_adapter"
 }
 
 ## #################
@@ -279,7 +294,7 @@ function change_magsafe_led_color() {
 # CH0I seems to be the "disable the adapter" key
 function enable_discharging() {
 	log "🔽🪫 Enabling battery discharging"
-	if [[ "$smc_supports_adapter_chie" == "true" ]]; then
+	if use_chie_for_adapter; then
 		smc_write_hex CHIE 08
 	elif [[ "$smc_supports_adapter_ch0j" == "true" ]]; then
 		smc_write_hex CH0J 01
@@ -291,7 +306,7 @@ function enable_discharging() {
 
 function disable_discharging() {
 	log "🔼🪫 Disabling battery discharging"
-	if [[ "$smc_supports_adapter_chie" == "true" ]]; then
+	if use_chie_for_adapter; then
 		smc_write_hex CHIE 00
 	elif [[ "$smc_supports_adapter_ch0j" == "true" ]]; then
 		smc_write_hex CH0J 00
@@ -312,6 +327,9 @@ function disable_discharging() {
 		elif [[ "$smc_supports_legacy" == "true" ]]; then
 			smc_write_hex CH0B 00
 			smc_write_hex CH0C 00
+		elif [[ "$smc_charging_via_adapter" == "true" ]]; then
+			# The adapter was just re-enabled above, which is all there is to reset
+			log "Charging is controlled through the adapter key, nothing more to reset"
 		else
 			log "⚠️ Unable to reset charging state"
 		fi
@@ -332,6 +350,9 @@ function disable_discharging() {
 		elif [[ "$smc_supports_legacy" == "true" ]]; then
 			smc_write_hex CH0B 00
 			smc_write_hex CH0C 00
+		elif [[ "$smc_charging_via_adapter" == "true" ]]; then
+			# The adapter was just re-enabled above, which is all there is to reset
+			log "Charging is controlled through the adapter key, nothing more to reset"
 		else
 			log "⚠️ Unable to reset charging state"
 		fi
@@ -352,9 +373,10 @@ function enable_charging() {
 	elif [[ "$smc_supports_legacy" == "true" ]]; then
 		smc_write_hex CH0B 00
 		smc_write_hex CH0C 00
-	else
+	elif [[ "$smc_charging_via_adapter" != "true" ]]; then
 		log "⚠️ Unable to determine SMC keys for enabling charging"
 	fi
+	# Without a dedicated charging key, re-enabling the adapter is what enables charging
 	disable_discharging
 }
 
@@ -365,12 +387,24 @@ function disable_charging() {
 	elif [[ "$smc_supports_legacy" == "true" ]]; then
 		smc_write_hex CH0B 02
 		smc_write_hex CH0C 02
+	elif [[ "$smc_charging_via_adapter" == "true" ]]; then
+		log "No charging inhibit key on this mac, cutting the adapter instead"
+		enable_discharging
 	else
 		log "⚠️ Unable to determine SMC keys for disabling charging"
 	fi
 }
 
 function get_smc_charging_status() {
+	# Charging is considered disabled exactly when the adapter is cut
+	if [[ "$smc_charging_via_adapter" == "true" ]]; then
+		if [[ "$(get_smc_discharging_status)" == "discharging" ]]; then
+			echo "disabled"
+		else
+			echo "enabled"
+		fi
+		return
+	fi
 	local status_key="CH0B"
 	if [[ "$smc_supports_tahoe" == "true" ]]; then
 		status_key="CHTE"
@@ -395,7 +429,7 @@ function get_smc_charging_status() {
 
 function get_smc_discharging_status() {
 	local status_key="CH0I"
-	if [[ "$smc_supports_adapter_chie" == "true" ]]; then
+	if use_chie_for_adapter; then
 		status_key="CHIE"
 	elif [[ "$smc_supports_adapter_ch0j" == "true" ]]; then
 		status_key="CH0J"
