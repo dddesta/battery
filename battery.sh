@@ -4,7 +4,7 @@
 ## Update management
 ## variables are used by this binary as well at the update script
 ## ###############
-BATTERY_CLI_VERSION="v1.3.5"
+BATTERY_CLI_VERSION="v1.3.6"
 
 # If a script may run as root:
 #   - Reset PATH to safe defaults at the very beginning of the script.
@@ -81,6 +81,9 @@ Usage:
 
   battery status
     output battery SMC status, % and time remaining
+
+  battery health
+    output battery wear: cycle count, capacity compared to design capacity, and temperature
 
   battery logs LINES[integer, optional]
     output logs of the battery CLI and GUI
@@ -468,6 +471,11 @@ function get_charger_state() {
 function get_maintain_percentage() {
 	maintain_percentage=$(cat $maintain_percentage_tracker_file 2>/dev/null)
 	echo "$maintain_percentage"
+}
+
+# Read a numeric property from the AppleSmartBattery registry entry
+function get_battery_property() {
+	ioreg -rn AppleSmartBattery | grep -E "^\s+\"$1\" =" | head -n1 | awk '{ print $3 }'
 }
 
 function get_voltage() {
@@ -1205,6 +1213,31 @@ if [[ "$action" == "calibrate" ]]; then
 	$battery_binary maintain recover &>/dev/null
 
 	echo -e "\n✅ Done\n"
+	exit 0
+
+fi
+
+# Battery wear report
+if [[ "$action" == "health" ]]; then
+
+	cycles=$(get_battery_property CycleCount)
+	design_cycles=$(get_battery_property DesignCycleCount9C)
+	design_capacity=$(get_battery_property DesignCapacity)
+	# NominalChargeCapacity is what System Settings bases "Maximum Capacity" on
+	current_capacity=$(get_battery_property NominalChargeCapacity)
+	temperature=$(get_battery_property Temperature)
+
+	if [[ -z "$cycles" || -z "$design_capacity" || -z "$current_capacity" || "$design_capacity" -eq 0 ]]; then
+		log "Could not read battery health from this mac"
+		exit 1
+	fi
+
+	echo "Cycle count:       $cycles${design_cycles:+ (rated for $design_cycles)}"
+	echo "Maximum capacity:  $((current_capacity * 100 / design_capacity))% ($current_capacity of $design_capacity mAh design)"
+	if [[ -n "$temperature" ]]; then
+		# Temperature is reported in hundredths of a degree celsius
+		echo "Temperature:       $(echo "scale=1; $temperature / 100" | bc -l)°C"
+	fi
 	exit 0
 
 fi
